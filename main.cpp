@@ -1,5 +1,6 @@
 #include <io.h>
 #include <iostream>
+#include <istream>
 #include <fstream>
 #include <direct.h>
 #include <vector>
@@ -95,6 +96,28 @@ vector<etmInfo> cleanup(vector<etmInfo> info)
 	return info;
 }
 
+bool does_file_exist(const char *fileName)
+{
+	ifstream infile(fileName);
+	return infile.good();
+}
+
+vector<etmInfo> renameFiles(vector<etmInfo> files, string dir)
+{
+	vector<etmInfo> notFound;
+
+	for (auto const& f : files) {
+		if (does_file_exist((dir + f.filename).c_str())) {
+			rename((dir + f.filename).c_str(), (dir + f.pubName + ".pdf").c_str());
+			cout << "\t" << (dir + f.filename) << " renamed to -> " << (dir + f.pubName + ".pdf") << endl;
+		}
+		else {
+			notFound.emplace_back(f);
+		}
+	}
+	return notFound;
+}
+
 int main(int argc, char* argv[])
 {
 	auto dirs = getsub();
@@ -103,6 +126,8 @@ int main(int argc, char* argv[])
 	for (auto const& c : dirs) {
 		auto info = parseETM(c + "etm.txt");
 		if (info.size() > 0) {
+			cout << "Processing -> " << c << endl;
+
 			auto cleanInfo = cleanup(info);
 
 			// write file
@@ -111,9 +136,12 @@ int main(int argc, char* argv[])
 			for (auto const& c : cleanInfo)
 				o << left << setw(12) << c.filename << left << setw(24) << c.pubName << c.description << endl;
 			o.close();
+
+			// rename pdfs
+			auto notFound = renameFiles(cleanInfo, c);
 		}
 	}
-
-	//system("PAUSE");
+	cout << endl << "Finished!" << endl;
+	system("PAUSE");
 	return 0;
 }
