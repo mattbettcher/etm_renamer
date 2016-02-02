@@ -1,130 +1,119 @@
+#include <io.h>
 #include <iostream>
 #include <fstream>
+#include <direct.h>
+#include <vector>
 #include <string>
-#include <iostream>
-#include <sstream>
-#include <algorithm>
-#include <locale>
-#include <cctype>
-#include <stdio.h>
+#include <regex>
+#include <iomanip>
 
 using namespace std;
 
-
-
-std::string & ltrim(std::string & str)
+struct etmInfo
 {
-	auto it2 = std::find_if(str.begin(), str.end(), [](char ch) { return !std::isspace<char>(ch, std::locale::classic()); });
-	str.erase(str.begin(), it2);
-	return str;
-}
-
-std::string & rtrim(std::string & str)
-{
-	auto it1 = std::find_if(str.rbegin(), str.rend(), [](char ch) { return !std::isspace<char>(ch, std::locale::classic()); });
-	str.erase(it1.base(), str.end());
-	return str;
-}
-
-std::string & trim(std::string & str)
-{
-	return ltrim(rtrim(str));
-}
-
-std::string trim_copy(std::string const & str)
-{
-	auto s = str;
-	return ltrim(rtrim(s));
-}
-
-bool is_number(const std::string& s)
-{
-	std::string::const_iterator it = s.begin();
-	while (it != s.end() && std::isdigit(*it)) ++it;
-	return !s.empty() && it == s.end();
-}
-
-string getName(string str)
-{
-	std::string::const_iterator it = str.begin();
-	while (it != str.end() && !isspace(*it)) ++it;
-	++it;
-	while (it != str.end() && !isspace(*it)) ++it;
-	str.erase(it, str.end());
-	return str;
-}
-
-bool is_file_exist(const char *fileName)
-{
-	std::ifstream infile(fileName);
-	return infile.good();
-}
-
-struct pdf
-{
-	string name;
-	string fileName;
+	string filename;
+	string description;
+	string pubType;
+	string pubName;
 };
 
-int main()
+// returns a list of subdirectories
+vector<string> getsub()
 {
-	ifstream file("etm.txt");
-	if (!file.good())
-		return 1;
+	char originalDirectory[_MAX_PATH];
+	_getcwd(originalDirectory, _MAX_PATH);
+	_finddata_t fileinfo;
+	auto dirs = vector<string>();
+	intptr_t handle = _findfirst("*", &fileinfo);
+	if (handle == -1) {
+		return dirs;
+	}
+	do {
+		if (strcmp(fileinfo.name, ".") == 0 || strcmp(fileinfo.name, "..") == 0)
+			continue;
+		if (fileinfo.attrib & _A_SUBDIR)
+			dirs.emplace_back(string(fileinfo.name) + "\\");
+	} while (_findnext(handle, &fileinfo) == 0);
 
-	string line;
-	pdf names[2000];
-	int index = 0;
+	_findclose(handle); // Close the stream
+	_chdir(originalDirectory);
+	return dirs;
+}
 
-	while (getline(file, line))
+// returns a list of all extracted ETM info
+vector<etmInfo> parseETM(string filename)
+{
+	vector<etmInfo> etm;
+	string str;
+
+	ifstream t(filename);
+	if (!t.good()) {
+		return etm;
+	}
+	
+	while (getline(t, str))
 	{
-		istringstream iss (line);
-
-		string result;
-		while (getline(iss, result, '\"'))
-		{
-			result = trim_copy(result);
-			if (result == "," || result == "") {
-				// comma separates items
-			}
-			else if (is_number(result))
-			{
-				// if the string is just a number skip it as well
-			}
-			else {
-				//cout << result << endl;
-				// decode here
-				auto s = result;
-				if (s.length() > 3)
-					s = trim(s.erase(3, 1000));
-				//cout << s << endl;
-
-				if (s == "MWO" || s == "TB" || s == "TM" || s == "LO") {
-					// manual name
-					auto name = getName(result);
-					names[index++].name = name;
+		etmInfo info;
+		// strip out the quotes!
+		auto result = smatch{};
+		regex rgx("\"([^\"]*)\"");
+		if (regex_search(str, result, rgx)) {
+			if (result[1].length() > 1) {
+				// need to grab Pub Number here
+				auto subResult = smatch{};
+				regex rgx2(R"((LO|MWO|TB|TM|SB)\s*(\w|-|&)*\s*)");
+				if (regex_search(str, subResult, rgx2)) {
+					info.pubType = subResult[1].str();
+					info.pubName = subResult[0].str();
 				}
-				if (is_number(s)) {
-					if (names[index - 1].fileName != result)
-							names[index - 1].fileName = result;
-				}
+				info.description = result[1].str();
 			}
+			str = result.suffix().str();
+		}
+		if (regex_search(str, result, rgx)) {
+			if (result[1].length() > 1)
+				info.filename = result[1].str();
+			str = result.suffix().str();
+		}
+		if (info.description.length() > 1)
+			etm.emplace_back(info);
+	}
+
+	return etm;
+}
+
+vector<etmInfo> cleanup(vector<etmInfo> info)
+{
+	info.erase(begin(info), begin(info) + 3);
+	for (auto i = 1; i < info.size(); i++) {
+		if (info[i - 1].filename == info[i].filename) {
+			info[i - 1].description.erase(info[i - 1].description.find_last_not_of(" \n\r\t") + 1) += info[i].description.erase(info[i].description.find_last_not_of(" \n\r\t") + 1);
+			info.erase(info.begin() + i);
+			i--;
+		}
+	}
+	return info;
+}
+
+int main(int argc, char* argv[])
+{
+	auto dirs = getsub();
+	dirs.emplace(dirs.begin(), "");
+	
+	for (auto const& c : dirs) {
+		auto info = parseETM(c + "etm.txt");
+		if (info.size() > 0) {
+			auto cleanInfo = cleanup(info);
+
+			// write file
+			ofstream o(c + "description.txt");
+			o << " Old File\t  Pub Name\t\t\t\t   Description" << endl;
+			for (auto const& c : cleanInfo)
+				o << left << setw(12) << c.filename << left << setw(24) << c.pubName << c.description << endl;
+			o.close();
 		}
 	}
 
-	for (int i = 0; i < index; i++)
-	{
-		if (is_file_exist(names[i].fileName.c_str()))
-		{
-			names[i].name += ".pdf";
-			rename(names[i].fileName.c_str(), names[i].name.c_str());
-			cout << names[i].fileName << " renamed to -> " << names[i].name << endl;
-		}
-		else {
-			cout << names[i].fileName << " does not exist!" << endl;
-		}
-	}
-	cout << endl << "Written by Matt Bettcher ;)" << endl;
-	system("pause");
+	//system("PAUSE");
 	return 0;
 }
